@@ -1,0 +1,164 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKAJS_NO_PARTITIONER_WARNING: 1
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: alertsdb
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./alert-processor/sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ppassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  api-ingestor:
+    build: ./api-ingestor
+    environment:
+      PROCESSOR_URL: http://alert-processor:4000/process-alert
+    depends_on:
+      alert-processor:
+        condition: service_started
+    ports:
+      - "3002:3000"
+
+  alert-processor:
+    build: ./alert-processor
+    environment:
+      DB_HOST: mysql
+      DB_USER: root
+      DB_PASS: password
+      DB_NAME: alertsdb
+      KAFKA_BROKER: kafka:9092
+      KAFKA_TOPIC: alert-events
+      KAFKAJS_NO_PARTITIONER_WARNING: 1
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+
+  # ✅ NEW: Auto-Close Worker container
+  auto-close-worker:
+    build: ./alert-processor
+    command: ["node", "workers/autoCloseWorker.js"]
+    environment:
+      DB_HOST: mysql
+      DB_USER: root
+      DB_PASS: password
+      DB_NAME: alertsdb
+      KAFKA_BROKER: kafka:9092
+      KAFKA_TOPIC: alert-events
+      AUTO_CLOSE_POLL_MS: 300000   # 5 minutes
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  metrics-consumer:
+    build: ./metrics-consumer
+    environment:
+      KAFKA_BROKER: kafka:9092
+      KAFKA_TOPIC: alert-events
+      KAFKAJS_NO_PARTITIONER_WARNING: 1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "9100:9100"
+
+  logs-consumer:
+    build: ./logs-consumer
+    environment:
+      KAFKA_BROKER: kafka:9092
+      KAFKA_TOPIC: alert-events
+      KAFKAJS_NO_PARTITIONER_WARNING: 1
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - metrics-consumer
+
+  loki:
+    image: grafana/loki:2.9.0
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./config/loki/loki-config.yml:/etc/loki/local-config.yaml
+      - ./loki-data:/loki 
+    ports:
+      - "3101:3100"
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./config/promtail/promtail-config.yml:/etc/promtail/config.yml
+      - /var/log:/var/log
+      - /var/run/docker.sock:/var/run/docker.sock 
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+      - loki
+
+volumes:
+  mysql_data:

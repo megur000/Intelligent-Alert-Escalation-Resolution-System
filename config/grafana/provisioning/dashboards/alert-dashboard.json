@@ -1,0 +1,89 @@
+{
+  "id": null,
+  "title": "Alert Monitoring Dashboard",
+  "editable": true,
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Alerts Over Time (by Status)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(alerts_total[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "type": "piechart",
+      "title": "Alerts by Severity",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (severity) (alerts_total)"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Top 5 Drivers with Most OPEN Alerts",
+      "datasource": "Alerts MySQL",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 10 },
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT driver_id, COUNT(*) AS open_alerts FROM alerts WHERE status = 'OPEN' GROUP BY driver_id ORDER BY open_alerts DESC LIMIT 5;",
+          "refId": "A"
+        }
+      ],
+      "styles": [
+        { "pattern": "open_alerts", "type": "number", "unit": "none" }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Recent Alert Lifecycle Events",
+      "datasource": "Alerts MySQL",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 10 },
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT ae.timestamp, ae.event_type, a.alert_id, a.driver_id, a.source_type, ae.new_status FROM alert_events ae JOIN alerts a ON a.alert_id = ae.alert_id ORDER BY ae.timestamp DESC LIMIT 20;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Auto-Closed Alerts (Last 24h)",
+      "datasource": "Alerts MySQL",
+      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT a.alert_id, a.driver_id, a.source_type, ae.timestamp AS auto_closed_at, JSON_UNQUOTE(JSON_EXTRACT(ae.metadata, '$.reason')) AS reason FROM alert_events ae JOIN alerts a ON a.alert_id = ae.alert_id WHERE ae.event_type='AUTO_CLOSED' AND ae.timestamp >= NOW() - INTERVAL 1 DAY ORDER BY ae.timestamp DESC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+  "type": "table",
+  "title": "Alert Status Timeline",
+  "datasource": "Alerts MySQL",
+  "gridPos": { "x": 0, "y": 28, "w": 24, "h": 10 },
+  "targets": [
+    {
+      "format": "table",
+      "rawSql": "SELECT ae.timestamp, ae.event_type, ae.old_status, ae.new_status FROM alert_events ae WHERE ae.alert_id = '${selected_alert}' ORDER BY ae.timestamp ASC;",
+      "refId": "A"
+    }
+  ]
+}
+
+
+  ]
+}
+
